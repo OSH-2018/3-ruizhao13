@@ -16,18 +16,21 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#define INDEX_NUMBER_MAX 128
+
 int inode_num = 13*64;
 int data_num = 64*1024 - 16;
 
 struct filenode {
     char filename[256];
-    int32_t content[];
+    int32_t content[INDEX_NUMBER_MAX];
     struct stat st;
     //struct filenode *next;
 };
 
 static const size_t size = 4 * 1024 * 1024 * (size_t)1024;
 static void *mem[64 * 1024];
+size_t blocknr = sizeof(mem) / sizeof(mem[0]);
 size_t blocksize = 64*1024;
 static struct filenode *inode;//[13 * 64]
 
@@ -189,21 +192,119 @@ static int oshfs_open(const char *path, struct fuse_file_info *fi)
 
 static int oshfs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
-    struct filenode *node = get_filenode(path);
-    if(offset + size > node->st.st_size)
+    //struct filenode *node = get_filenode(path);
+    struct filenode *node = NULL;
+    int k = -1;
+    for(int i = 0; i < inode_num ;i++){
+        if(inode_map[i]){
+            if(strcmp(inode[i].filename, path + 1)==0){
+                node =  (inode + i);
+                k = i;
+            }
+        }
+    }
+    if(  (!node)  || (k == -1)  ){
+        return -1;
+    }
+
+
+
+
+    //node->content = realloc(node->content, node->st->st_size);
+
+    size_t block_used_num = node->st.st_size % blocksize ? (node->st.st_size / blocksize + 1) : (node->st.st_size / blocksize);
+    size_t new_block_used_num = block_used_num;
+    //change the size of the file
+    if(offset + size > node->st.st_size){
         node->st.st_size = offset + size;
-    //node->content = realloc(node->content, node->st.st_size);
+    }
+    //change the block numbers used by the file
+    if(offset + size > block_used_num * blocksize){
+        //file need more blocks
+        new_block_used_num = node->st.st_size % blocksize ? (node->st.st_size / blocksize + 1) : (node->st.st_size / blocksize);
+        for(size_t i = block_used_num; i<new_block_used_num; i++){
+            bool is_mem_full = 1;
+            for(int j = 16;j <blocknr; j++){
 
+                if(data_map[j] == 0){
+                    is_mem_full = 0;
+                    mem[j] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                    data_map[j] = 1;
+                    node->content[i] = j;
+                }
+            }
+            if(is_mem_full){
+                return -errno;
+            }
+        }
+    }
 
+    //memcpy(node->content + offset, buf, size);
+    size_t blk1 = offset / blocksize;
+    size_t off1 = offset % blocksize;
+    size_t blk2 = (offset + size) /blocksize;
+    size_t off2 = (offset + size) %blocksize;
+    if(blk1 == blk2){
+        memcpy(mem[node->content[blk1]]+off1,buf, size);
+        return (int)size;
+    }else{
+        memcpy(mem[node->content[blk1]]+off1,buf, blocksize- off1);
+        for(size_t i = blk1+1;i<blk2;i++){
+            memcpy(mem[node->content[i]], buf+blocksize-off1 + (i-blk1-1)*blocksize, blocksize);
 
-    memcpy(node->content + offset, buf, size);
-    return size;
+        }
+        memcpy(mem[node->content[blk2]], buf+blocksize-off1 + (blk2-blk1-1)*blocksize, off2);
+        return (int)size;
+    }
+
+    return (int)size;
 }
 
 static int oshfs_truncate(const char *path, off_t size)
 {
-    struct filenode *node = get_filenode(path);
-    node->st->st_size = size;
+    //struct filenode *node = get_filenode(path);
+    struct filenode *node = NULL;
+    int k = -1;
+    for(int i = 0; i < inode_num ;i++){
+        if(inode_map[i]){
+            if(strcmp(inode[i].filename, path + 1)==0){
+                node =  (inode + i);
+                k = i;
+            }
+        }
+    }
+    if(  (!node)  || (k == -1)  ){
+        return -1;
+    }
+    node->st.st_size = size;
+    size_t block_used_num = node->st.st_size % blocksize ? (node->st.st_size / blocksize + 1) : (node->st.st_size / blocksize);
+    size_t new_block_used_num = block_used_num;
+    //change the size of the file
+    if(size > node->st.st_size){
+        node->st.st_size = size;
+    }
+    //change the block numbers used by the file
+    if(size > block_used_num * blocksize){
+        //file need more blocks
+        new_block_used_num = node->st.st_size % blocksize ? (node->st.st_size / blocksize + 1) : (node->st.st_size / blocksize);
+        for(size_t i = block_used_num; i<new_block_used_num; i++){
+            bool is_mem_full = 1;
+            for(int j = 16;j <blocknr; j++){
+
+                if(data_map[j] == 0){
+                    is_mem_full = 0;
+                    mem[j] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                    data_map[j] = 1;
+                    node->content[i] = j;
+                }
+            }
+            if(is_mem_full){
+                return -errno;
+            }
+        }
+    }
+
+
     node->content = realloc(node->content, size);
     return 0;
 }
@@ -220,10 +321,10 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
     size_t blk2 = (offset + ret) /blocksize;
     size_t off2 = (offset + ret) %blocksize;
     if(blk1 == blk2){
-        memcpy(buf, mem[node->content[blk1]],ret);
+        memcpy(buf, mem[node->content[blk1]]+off1,ret);
         return ret;
     }else{
-        memcpy(buf, mem[node->content[blk1]], blocksize- off1);
+        memcpy(buf, mem[node->content[blk1]]+off1, blocksize- off1);
         for(int i = blk1+1;i<blk2;i++){
             memcpy(buf+blocksize-off1 + (i-blk1-1)*blocksize,mem[node->content[i]],blocksize);
 
@@ -232,13 +333,38 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
         return ret;
     }
 
-    memcpy(buf, node->content + offset, ret);
+    //memcpy(buf, node->content + offset, ret);
     return ret;
 }
 
 static int oshfs_unlink(const char *path)
 {
     // Not Implemented
+    struct filenode *node = NULL;
+    int k = -1;
+    for(int i = 0; i < inode_num ;i++){
+        if(inode_map[i]){
+            if(strcmp(inode[i].filename, path + 1)==0){
+                node =  (inode + i);
+                k = i;
+            }
+        }
+    }
+    if(  (!node)  || (k == -1)  ){
+        return -1;
+    }
+    for(int i = 0;i<INDEX_NUMBER_MAX;i++){
+        if(inode[k].content[i] < 3){
+            break;
+        }
+        munmap(mem[inode[k].content[i]],blocksize);
+        data_map[inode[k].content[i]] = 0;
+    }
+    inode_map[k]=0;
+
+
+
+
 
     return 0;
 }
