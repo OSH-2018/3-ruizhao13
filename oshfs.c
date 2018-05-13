@@ -84,7 +84,7 @@ static void create_filenode(const char *filename, const struct stat *st)
 
     memcpy(inode[new_inode].filename, filename, strlen(filename) + 1);
     memcpy(&(inode[new_inode].st), st, sizeof(struct stat));
-    inode[new_inode].content = NULL;
+    memset(inode[new_inode].content, 0, INDEX_NUMBER_MAX * sizeof(int32_t));
 }
 
 
@@ -231,6 +231,7 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
                     mem[j] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
                     data_map[j] = 1;
                     node->content[i] = j;
+                    break;
                 }
             }
             if(is_mem_full){
@@ -276,13 +277,20 @@ static int oshfs_truncate(const char *path, off_t size)
     if(  (!node)  || (k == -1)  ){
         return -1;
     }
-    node->st.st_size = size;
+
+
+
+
     size_t block_used_num = node->st.st_size % blocksize ? (node->st.st_size / blocksize + 1) : (node->st.st_size / blocksize);
     size_t new_block_used_num = block_used_num;
+
+
+
+
     //change the size of the file
-    if(size > node->st.st_size){
-        node->st.st_size = size;
-    }
+
+    node->st.st_size = size;
+
     //change the block numbers used by the file
     if(size > block_used_num * blocksize){
         //file need more blocks
@@ -296,6 +304,7 @@ static int oshfs_truncate(const char *path, off_t size)
                     mem[j] = mmap(NULL, blocksize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
                     data_map[j] = 1;
                     node->content[i] = j;
+                    break;
                 }
             }
             if(is_mem_full){
@@ -303,9 +312,28 @@ static int oshfs_truncate(const char *path, off_t size)
             }
         }
     }
+    else if(size <= (block_used_num - 1) * blocksize ){
+        //file don't need less blocks
+        new_block_used_num = node->st.st_size % blocksize ? (node->st.st_size / blocksize + 1) : (node->st.st_size / blocksize);
+        for(size_t i = new_block_used_num; i< block_used_num; i++){
+            data_map[node->content[i]] = 0;
+
+            munmap(mem[node->content[i]], blocksize);
+        }
 
 
-    node->content = realloc(node->content, size);
+
+    }else{
+        //file don't have to chage the numbers of the blocks
+        //so we don't have to do anything
+        ;
+
+
+
+    }
+
+
+    //node->content = realloc(node->content, size);
     return 0;
 }
 
