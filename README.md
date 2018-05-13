@@ -6,6 +6,8 @@ number of blocks: `blocknr` = 64 * 1024
 
 `blocksize` = 64*1024 Byte
 
+file system size : `blocknr` * `blocksize` = 4GB
+
 max number of files :`inodenr` = 13*64
 
 Maximum file size : INDEX_NUMBER_MAX * `blocksize`
@@ -15,6 +17,8 @@ Maximum file size : INDEX_NUMBER_MAX * `blocksize`
 ## 实现思路
 
 把前16个block放信息，后面的64*1024 - 16个block放data
+
+第一块block：放文件系统的基本信息
 
 第二块block：放`inode_map` :记录哪些文件节点被占用了
 
@@ -42,6 +46,7 @@ struct filenode {
 
 > 改进方案：Multi-Level Index， 可以用来支持更大的文件
 
+## 实验结果
 
-
+![1](./img/1.png)
 
